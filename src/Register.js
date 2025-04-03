@@ -13,6 +13,8 @@ function Register({ setUser }) {
   const handleSubmit = (e) => {
     e.preventDefault();
 
+    // Sprawdzenie, czy hasło ma co najmniej 6 znaków i czy hasła się zgadzają
+    if (email && password.length >= 6 && password === confirmPassword) {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s\d@]+$/;
     // Sprawdzenie, czy hasło ma co najmniej 6 znaków i czy hasła się zgadzają
     if (email && password.length >= 6 && password === confirmPassword && emailRegex.test(email)) {
