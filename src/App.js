@@ -1,16 +1,30 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
-  BrowserRouter as Router,
+  BrowserRouter as Router, // Zmieniono na HashRouter
   Route,
   Routes,
   Navigate,
 } from "react-router-dom";
 import Login from "./Login";
-import Register from "./Register"; // Importuj komponent rejestracji
+import Register from "./Register";
 import Home from "./Home";
-//
+import Zarzadzaj from "./zarzadzaj"; // Importuj nowy komponent
+
 function App() {
-  const [user, setUser] = useState(null); // Przechowujemy zalogowanego użytkownika
+  const [user, setUser] = useState(() => {
+    // Sprawdź localStorage i załaduj użytkownika, jeśli istnieje
+    const savedUser = localStorage.getItem("user");
+    return savedUser ? JSON.parse(savedUser) : null;
+  });
+
+  useEffect(() => {
+    // Ustawienie lokalnego użytkownika w localStorage, jeśli istnieje
+    if (user) {
+      localStorage.setItem("user", JSON.stringify(user));
+    } else {
+      localStorage.removeItem("user");
+    }
+  }, [user]);
 
   return (
     <Router>
@@ -25,7 +39,11 @@ function App() {
         />
         <Route
           path="/home"
-          element={user ? <Home user={user} /> : <Navigate to="/" />} // Sprawdzamy, czy użytkownik jest zalogowany
+          element={user ? <Home user={user} setUser={setUser} /> : <Navigate to="/" />} // Przekazujemy setUser do Home
+        />
+        <Route
+          path="/zarzadzaj"
+          element={user ? <Zarzadzaj user={user} setUser={setUser} /> : <Navigate to="/" />} // Nowa trasa do zarządzania kontem z przekazanym user
         />
       </Routes>
     </Router>
