@@ -9,6 +9,10 @@ import Login from "./Login";
 import Register from "./Register";
 import Home from "./Home";
 import Zarzadzaj from "./zarzadzaj"; // Importuj nowy komponent
+import Reservations from "./reservations";
+import Chat from "./Chat";
+import Kalendarz from "./Kalendarz";
+import Reviews from "./Reviews";
 
 function App() {
   const [user, setUser] = useState(() => {
@@ -39,12 +43,37 @@ function App() {
         />
         <Route
           path="/home"
-          element={user ? <Home user={user} setUser={setUser} /> : <Navigate to="/" />} // Przekazujemy setUser do Home
+          element={
+            user ? <Home user={user} setUser={setUser} /> : <Navigate to="/" />
+          } // Przekazujemy setUser do Home
+        />
+        <Route
+          path="/kalendarz"
+          element={user ? <Kalendarz user={user} /> : <Navigate to="/" />}
         />
         <Route
           path="/zarzadzaj"
-          element={user ? <Zarzadzaj user={user} setUser={setUser} /> : <Navigate to="/" />} // Nowa trasa do zarządzania kontem z przekazanym user
+          element={
+            user ? (
+              <Zarzadzaj user={user} setUser={setUser} />
+            ) : (
+              <Navigate to="/" />
+            )
+          } // Nowa trasa do zarządzania kontem z przekazanym user
         />
+        
+        <Route
+          path="/reservations"
+          element={
+            user ? (
+              <Reservations user={user} setUser={setUser} />
+            ) : (
+              <Navigate to="/" />
+            )
+          } // Trasa do zarządzania rezerwacjami z przekazanym user
+        />
+        <Route path="/chat" element={<Chat user={user} />} />
+        <Route path="/reviews/:teacherId" element={<Reviews />} />
       </Routes>
     </Router>
   );
