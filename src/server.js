@@ -4,7 +4,6 @@ const bcrypt = require("bcrypt");
 const path = require("path");
 const { error } = require("console");
 const cors = require("cors");
-const cron = require("node-cron");
 
 const app = express();
 app.use(express.json());
@@ -26,7 +25,6 @@ const collectionName = "users";
 const announcementsCollectionName = "announcements";
 const notificationsCollectionName = "notifications";
 const reservationsCollectionName = "reservations";
-const reviewsCollectionName = "reviews";
 const port = 4000;
 
 // Funkcja do połączenia z bazą danych
@@ -528,39 +526,22 @@ app.get(
 );
 
 // Endpoint do pobierania rezerwacji dla danego nauczyciela
-app.get(
-  "/reservations/teacher/:teacherEmail",
-  cors(corsOptions),
-  async (req, res) => {
-    const { teacherEmail } = req.params;
+app.get("/teachers", cors(corsOptions), async (req, res) => {
+  try {
+    const db = await connectToDb();
+    const teachersCollection = db.collection("reservations");
 
-    if (!teacherEmail) {
-      return res
-        .status(400)
-        .json({ error: "Brak identyfikatora użytkownika." });
-    }
+    //pobierz wszytkich nauczycieli
+    const teachers = await teachersCollection.find({}).toArray();
 
-    try {
-      const db = await connectToDb();
-      const reservationsCollection = db.collection(reservationsCollectionName);
+    console.log(teachers, "nauczyciele");
 
-      const reservations = await reservationsCollection
-        .find({ teacher_email: teacherEmail })
-        .toArray();
-
-      if (reservations.length === 0) {
-        return res.status(404).json({
-          error: "Brak rezerwacji do akceptacji dla tego użytkownika.",
-        });
-      }
-      
-      res.status(200).json({ reservations });
-    } catch (err) {
-      console.error("Błąd podczas pobierania rezerwacji:", err);
-      res.status(500).json({ error: "Wewnętrzny błąd serwera" });
-    }
+    res.status(200).json({ teachers });
+  } catch (err) {
+    console.error("Błąd podczas pobierania nauczycieli:", err);
+    res.status(500).json({ error: "Wewnętrzny błąd serwera." });
   }
-);
+});
 
 // Endpoint do akceptacji rezerwacji
 app.get(
@@ -820,135 +801,6 @@ app.post("/chat/send", async (req, res) => {
   } catch (err) {
     console.error("Błąd wysyłania wiadomości:", err);
     res.status(500).json({ error: "Nie udało się wysłać wiadomości." });
-  }
-});
-
-// Funkcja do dodawania powiadomień o nadchodzących spotkaniach
-const addUpcomingMeetingNotifications = async () => {
-  try {
-    const db = await connectToDb();
-    const reservationsCollection = db.collection(reservationsCollectionName); // Kolekcja ze spotkaniami
-    const notificationsCollection = db.collection(notificationsCollectionName);
-    const usersCollection = db.collection(collectionName);
-
-    // Pobierz datę na jutro
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const tomorrowString = tomorrow.toISOString().split("T")[0];
-
-    console.log("Sprawdzanie spotkań na jutro:", tomorrowString);
-
-    // Pobierz rezerwacje na jutro
-    const reservations = await reservationsCollection
-      .find({ "date.date": tomorrowString, accepted: true })
-      .toArray();
-
-    console.log("Rezerwacje na jutro:", reservations);
-
-    // Dodaj powiadomienia dla każdej rezerwacji
-    for (const reservation of reservations) {
-      if (reservation.accepted) {
-        const hour = reservation.date.hour ? String(reservation.date.hour).padStart(2, "0") : "00";
-        const minutes = reservation.date.minutes ? String(reservation.date.minutes).padStart(2, "0") : "00";
-        const meetingTime = `${hour}:${minutes}`;
-        
-        // Powiadomienie dla ucznia
-        const studentNotification = {
-          title: "Przypomnienie o spotkaniu",
-          message: `Masz zaplanowane spotkanie z nauczycielem ${reservation.teacher_name} jutro o ${meetingTime}.`,
-          date: new Date().toISOString(),
-          userEmail: reservation.email,
-        };
-
-        const user = await usersCollection.findOne({ email: reservation.email });
-        const userName = `${user.firstName} ${user.lastName}`;
-
-        // Powiadomienie dla nauczyciela
-        const teacherNotification = {
-          title: "Przypomnienie o spotkaniu",
-          message: `Masz zaplanowane spotkanie z uczniem (${userName}) jutro o ${meetingTime}.`,
-          date: new Date().toISOString(),
-          userEmail: reservation.teacher_email,
-        };
-
-        // Zapisz powiadomienia do bazy danych
-        await notificationsCollection.insertMany([
-          studentNotification,
-          teacherNotification,
-        ]);
-
-        console.log("Dodano powiadomienia dla rezerwacji:", reservation._id);
-      }
-    }
-
-    console.log("Powiadomienia o nadchodzących spotkaniach zostały dodane.");
-  } catch (err) {
-    console.error("Błąd podczas dodawania powiadomień o spotkaniach:", err);
-  }
-};
-// Endpoint do pobierania rezerwacji użytkownika
-app.get("/reservations/user/:email", cors(corsOptions), async (req, res) => {
-  const { email } = req.params;
-
-  try {
-    const db = await connectToDb();
-    const reservationsCollection = db.collection(reservationsCollectionName);
-
-    // Pobieranie rezerwacji dla danego użytkownika
-    const reservations = await reservationsCollection
-      .find({ userEmail: email })
-      .toArray();
-
-    res.status(200).json({ reservations });
-  } catch (err) {
-    console.error("Błąd podczas pobierania rezerwacji:", err);
-    res.status(500).json({ error: "Wewnętrzny błąd serwera." });
-  }
-});
-
-
-// Harmonogram - codziennie o 12:00
-cron.schedule("10 12 * * *", addUpcomingMeetingNotifications);
-// Endpoint do pobierania opinii
-app.get("/reviews/:teacherId", async (req, res) => {
-  const { teacherId } = req.params;
-
-  try {
-    const db = await connectToDb();
-    const reviewsCollection = db.collection(reviewsCollectionName);
-    const reviews = await reviewsCollection.find({ teacherId }).toArray();
-
-    res.status(200).json(reviews);
-  } catch (err) {
-    console.error("Błąd podczas pobierania opinii:", err);
-    res.status(500).json({ error: "Nie udało się pobrać opinii." });
-  }
-});
-
-// Endpoint do dodawania opinii
-app.post("/reviews/:teacherId", async (req, res) => {
-  const { teacherId } = req.params;
-  const { review, studentEmail, rating } = req.body;
-  console.log("Otrzymane dane:", { review, studentEmail, rating });
-
-  try {
-    const db = await connectToDb();
-    const reviewsCollection = db.collection(reviewsCollectionName);
-
-    const newReview = {
-      teacherId,
-      review,
-      studentEmail,
-      timestamp: new Date(),
-      rating,
-    };
-
-    await reviewsCollection.insertOne(newReview);
-
-    res.status(201).json(newReview);
-  } catch (err) {
-    console.error("Błąd podczas dodawania opinii:", err);
-    res.status(500).json({ error: "Nie udało się dodać opinii." });
   }
 });
 
