@@ -4,7 +4,7 @@ const bcrypt = require("bcrypt");
 const path = require("path");
 const { error } = require("console");
 const cors = require("cors");
-const { ObjectId } = require("mongodb");
+const cron = require("node-cron");
 
 const app = express();
 app.use(express.json());
@@ -252,11 +252,24 @@ app.get("/announcements", cors(corsOptions), async (req, res) => {
 
 // Endpoint do dodawania nowego ogłoszenia
 app.post("/announcements", cors(corsOptions), async (req, res) => {
-  const { title, content, date, teacher_name, subject } = req.body;
+  const {
+    title,
+    content,
+    date,
+    teacher_name,
+    teacher_email,
+    subject,
+    terms = [],
+  } = req.body;
 
-  // Walidacja danych
-  if (!title || !content || !date || !teacher_name || !subject) {
-    return res.status(400).json({ error: "Wszystkie pola są wymagane." });
+  // Dodanie pustej tablicy, jeśli `terms` jest undefined
+  const validTerms = Array.isArray(terms) ? terms : [];
+
+  // Walidacja danych - teraz sprawdza, czy nie ma dodanych terminów
+  if (!terms || terms.length === 0) {
+    return res
+      .status(400)
+      .json({ error: "Przynajmniej jeden termin jest wymagany." });
   }
 
   try {
@@ -269,15 +282,16 @@ app.post("/announcements", cors(corsOptions), async (req, res) => {
       content,
       date,
       teacher_name,
+      teacher_email,
       subject,
+      terms: validTerms, // Użycie domyślnej wartości
     };
+    console.log("Dodawane ogłoszenie:", newAnnouncement);
 
     const result = await announcementsCollection.insertOne(newAnnouncement);
     const addedAnnouncement = await announcementsCollection.findOne({
       _id: result.insertedId,
     });
-
-    console.log("Dodano nowe ogłoszenie:", addedAnnouncement);
 
     res.status(201).json({
       message: "Ogłoszenie dodane pomyślnie.",
@@ -289,109 +303,652 @@ app.post("/announcements", cors(corsOptions), async (req, res) => {
   }
 });
 
-// Endpoint do rezerwacji ogłoszenia
-app.post("/reserve", cors(corsOptions), async (req, res) => {
-  // Definicja endpointu POST "/reserve". Funkcja asynchroniczna, która przyjmuje request i response.
-  console.log("Odebrane dane:", req.body); // Zalogowanie otrzymanych danych w żądaniu (request body), które będą zawierały dane do rezerwacji.
+const { ObjectId } = require("mongodb");
+const { create } = require("domain");
 
-  // Destrukturyzacja danych z request body: announcementId, studentId, date
-  const { announcementId, studentId, date } = req.body;
-  console.log(req.body);
+app.post("/announcements/:id/reserve", async (req, res) => {
+  const { id } = req.params; // ID ogłoszenia z URL
+  const { termIndex, email } = req.body; // Indeks rezerwowanego terminu z treści żądania
 
-  // Sprawdzenie, czy wszystkie wymagane dane są przesłane
-  if (!announcementId || !studentId || !date) {
-    return res.status(400).json({ error: "Wszystkie pola są wymagane." }); // Jeśli brak jakiegokolwiek z wymaganych pól, zwróć błąd 400 (Bad Request).
-  }
-
-  // Sprawdzenie, czy announcementId jest poprawne (czy jest prawidłowym ObjectId)
-  if (!ObjectId.isValid(announcementId)) {
-    return res
-      .status(400) // Zwróć błąd 400 (Bad Request)
-      .json({ error: "Nieprawidłowy identyfikator ogłoszenia." }); // Informacja, że podany identyfikator ogłoszenia jest niepoprawny.
+  // Sprawdzenie, czy termIndex został przekazany
+  if (typeof termIndex === "undefined") {
+    return res.status(400).json({ error: "Brakuje termIndex w żądaniu" });
   }
 
   try {
-    // Połączenie z bazą danych
-    const db = await connectToDb(); // Asynchroniczne połączenie z bazą danych
-    const announcementsCollection = db.collection(announcementsCollectionName); // Uzyskanie dostępu do kolekcji ogłoszeń w bazie danych
+    const db = await connectToDb();
+    const announcementsCollection = db.collection(announcementsCollectionName);
+    const reservationsCollection = db.collection(reservationsCollectionName);
 
-    // Sprawdzenie dostępności ogłoszenia po ID
+    // Konwersja id na ObjectId
+    const objectId = new ObjectId(id);
+
+    // Znajdź ogłoszenie
     const announcement = await announcementsCollection.findOne({
-      _id: new ObjectId(announcementId), // Przekonwertowanie stringa announcementId na obiekt ObjectId, ponieważ MongoDB przechowuje identyfikatory w tym formacie.
+      _id: objectId,
     });
 
+    // Sprawdź, czy ogłoszenie istnieje
     if (!announcement) {
-      return res.status(404).json({ error: "Ogłoszenie nie znaleziono." }); // Jeśli ogłoszenie o podanym ID nie istnieje, zwróć błąd 404 (Not Found)
+      return res.status(404).json({ error: "Ogłoszenie nie znalezione" });
     }
 
-    // Sprawdzenie, czy termin rezerwacji jest już zajęty
-    const isDateTaken =
-      announcement.reservations && // Sprawdź, czy istnieją rezerwacje w ogłoszeniu
-      announcement.reservations.some(
-        // Przejdź przez wszystkie rezerwacje
-        (reservation) => reservation.date === date // Sprawdź, czy data rezerwacji już istnieje
-      );
-
-    if (isDateTaken) {
-      return res.status(409).json({ error: "Termin jest już zajęty." }); // Jeśli termin już jest zajęty, zwróć błąd 409 (Conflict)
+    // Sprawdź, czy podany indeks terminu jest prawidłowy
+    if (!announcement.terms || !announcement.terms[termIndex]) {
+      return res.status(400).json({ error: "Nieprawidłowy indeks terminu" });
     }
 
-    // Dodanie nowej rezerwacji
-    const newReservation = { studentId, date }; // Tworzenie obiektu nowej rezerwacji
+    const reservedTerm = announcement.terms[termIndex];
 
-    await announcementsCollection.updateOne(
-      // Asynchroniczne zaktualizowanie ogłoszenia w bazie danych
-      { _id: new ObjectId(announcementId) }, // Wyszukiwanie ogłoszenia po ID
-      { $push: { reservations: newReservation } } // Dodanie nowej rezerwacji do tablicy reservations w dokumencie ogłoszenia
+    // Usuń rezerwowany termin
+    const updatedTerms = announcement.terms.filter(
+      (_, index) => index !== termIndex
     );
 
-    // Powiadomienie o dokonanej rezerwacji
-    console.log("Rezerwacja dokonana:", newReservation); // Zalogowanie nowej rezerwacji w konsoli
+    // Zaktualizuj ogłoszenie w bazie danych
+    await announcementsCollection.updateOne(
+      { _id: objectId },
+      { $set: { terms: updatedTerms } }
+    );
 
-    // Zwrócenie odpowiedzi o pomyślnym dokonaniu rezerwacji
-    res.status(201).json({
-      message: "Rezerwacja dokonana pomyślnie.", // Informacja o sukcesie
-      reservation: newReservation, // Zwrócenie obiektu rezerwacji
+    const teacher_email = announcement.teacher_email;
+
+    // Utwórz nowy rekord w kolekcji "reservations"
+    const reservation = {
+      announcementId: id,
+      email: email,
+      subject: announcement.subject,
+      teacher_name: announcement.teacher_name,
+      teacher_email: teacher_email,
+      date: reservedTerm,
+      accepted: false,
+      createdAt: new Date(),
+    };
+
+    await reservationsCollection.insertOne(reservation);
+
+    const data = { updatedTerms, reservation, teacher_email };
+
+    console.log("teacher email", teacher_email);
+
+    // Zwróć odpowiedź z sukcesem i zaktualizowaną listą terminów
+    res.status(200).json({
+      message: "Rezerwacja zakończona sukcesem",
+      updatedTerms,
+      reservation,
+      teacher_email,
     });
-  } catch (err) {
-    // Obsługa błędów, jeśli coś poszło nie tak
-    console.error("Błąd podczas rezerwacji ogłoszenia:", err); // Zalogowanie błędu w konsoli
-    res.status(500).json({ error: "Wewnętrzny błąd serwera." }); // Zwrócenie błędu 500 (Internal Server Error) w przypadku problemu z serwerem
+  } catch (error) {
+    console.error("Błąd podczas rezerwacji:", error);
+    // Obsłuż błąd wewnętrzny serwera
+    res.status(500).json({ error: "Wewnętrzny błąd serwera" });
   }
 });
 
-// Endpoint do pobierania rezerwacji użytkownika
-app.get("/reservations/:userId", cors(corsOptions), async (req, res) => {
-  const { userId } = req.params;
+// Endpoint do pobierania powiadomień dla danego użytkownika
+app.get(
+  "/notifications/user/:userEmail",
+  cors(corsOptions),
+  async (req, res) => {
+    const { userEmail } = req.params;
 
-  if (!userId) {
-    return res.status(400).json({ error: "Brak ID użytkownika." });
+    if (!userEmail) {
+      return res
+        .status(400)
+        .json({ error: "Brak identyfikatora użytkownika." });
+    }
+
+    try {
+      const db = await connectToDb();
+      const notificationsCollection = db.collection(
+        notificationsCollectionName
+      );
+
+      const notifications = await notificationsCollection
+        .find({ userEmail: userEmail })
+        .toArray();
+
+      if (notifications.length === 0) {
+        return res
+          .status(404)
+          .json({ error: "Brak powiadomień dla tego użytkownika." });
+      }
+
+      res.status(200).json({ notifications });
+    } catch (err) {
+      console.error("Błąd podczas pobierania powiadomień:", err);
+      res.status(500).json({ error: "Wewnętrzny błąd serwera" });
+    }
+  }
+);
+
+// Endpoint do dodawania nowego powiadomienia
+app.post("/notifications", cors(corsOptions), async (req, res) => {
+  const { title, message, date, userEmail } = req.body;
+
+  if (!title || !message || !date || !userEmail) {
+    return res.status(400).json({
+      error: "Wszystkie pola (title, message, date, userEmail) są wymagane.",
+    });
   }
 
   try {
-    // Połączenie z bazą danych
     const db = await connectToDb();
-    const announcementsCollection = db.collection(announcementsCollectionName);
+    const notificationsCollection = db.collection(notificationsCollectionName);
 
-    // Pobranie rezerwacji, w których studentId odpowiada userId
-    const reservations = await announcementsCollection
-      .aggregate([
-        { $unwind: "$reservations" }, // Rozdzielenie tablicy reservations
-        { $match: { "reservations.studentId": userId } }, // Dopasowanie do użytkownika
-        {
-          $project: {
-            _id: 0,
-            title: 1,
-            date: "$reservations.date",
-          },
-        },
-      ])
+    const newNotification = {
+      title,
+      message,
+      date,
+      userEmail,
+    };
+
+    await notificationsCollection.insertOne(newNotification);
+
+    console.log("Dodawane powiadomienie:", newNotification);
+
+    res.status(201).json({
+      message: "Powiadomienie dodane pomyślnie.",
+      newNotification,
+    });
+  } catch (err) {
+    console.error("Błąd podczas dodawania powiadomienia:", err);
+    res.status(500).json({ error: "Wewnętrzny błąd serwera" });
+  }
+});
+
+// Endpoint do usuwania powiadomienia po ID
+app.delete(
+  "/notifications/delete/:notificationId",
+  cors(corsOptions),
+  async (req, res) => {
+    const { notificationId } = req.params;
+
+    if (!notificationId) {
+      return res
+        .status(400)
+        .json({ error: "Brak identyfikatora powiadomienia." });
+    }
+
+    try {
+      const db = await connectToDb();
+      const notificationsCollection = db.collection(
+        notificationsCollectionName
+      );
+
+      const result = await notificationsCollection.deleteOne({
+        _id: new ObjectId(notificationId),
+      });
+
+      if (result.deletedCount === 0) {
+        return res.status(404).json({ error: "Powiadomienie nie znalezione" });
+      }
+
+      res.status(200).json({ message: "Powiadomienie usunięte pomyślnie" });
+    } catch (err) {
+      console.error("Błąd podczas usuwania powiadomienia:", err);
+      res.status(500).json({ error: "Wewnętrzny błąd serwera" });
+    }
+  }
+);
+
+// Endpoint do pobierania rezerwacji dla danego użytkownika
+app.get(
+  "/reservations/user/:userEmail",
+  cors(corsOptions),
+  async (req, res) => {
+    const { userEmail } = req.params;
+
+    if (!userEmail) {
+      return res
+        .status(400)
+        .json({ error: "Brak identyfikatora użytkownika." });
+    }
+
+    try {
+      const db = await connectToDb();
+      const reservationsCollection = db.collection(reservationsCollectionName);
+
+      const reservations = await reservationsCollection
+        .find({ email: userEmail })
+        .toArray();
+
+      if (reservations.length === 0) {
+        return res
+          .status(404)
+          .json({ error: "Brak rezerwacji dla tego użytkownika." });
+      }
+
+      res.status(200).json({ reservations });
+    } catch (err) {
+      console.error("Błąd podczas pobierania rezerwacji:", err);
+      res.status(500).json({ error: "Wewnętrzny błąd serwera" });
+    }
+  }
+);
+
+// Endpoint do pobierania rezerwacji dla danego nauczyciela
+app.get(
+  "/reservations/teacher/:teacherEmail",
+  cors(corsOptions),
+  async (req, res) => {
+    const { teacherEmail } = req.params;
+
+    if (!teacherEmail) {
+      return res
+        .status(400)
+        .json({ error: "Brak identyfikatora użytkownika." });
+    }
+
+    try {
+      const db = await connectToDb();
+      const reservationsCollection = db.collection(reservationsCollectionName);
+
+      const reservations = await reservationsCollection
+        .find({ teacher_email: teacherEmail })
+        .toArray();
+
+      if (reservations.length === 0) {
+        return res.status(404).json({
+          error: "Brak rezerwacji do akceptacji dla tego użytkownika.",
+        });
+      }
+      
+      res.status(200).json({ reservations });
+    } catch (err) {
+      console.error("Błąd podczas pobierania rezerwacji:", err);
+      res.status(500).json({ error: "Wewnętrzny błąd serwera" });
+    }
+  }
+);
+
+// Endpoint do akceptacji rezerwacji
+app.get(
+  "/reservation/accept/:reservationId",
+  cors(corsOptions),
+  async (req, res) => {
+    const { reservationId } = req.params;
+
+    if (!reservationId) {
+      return res.status(400).json({ error: "Brak id rezerwacji." });
+    }
+
+    try {
+      const db = await connectToDb();
+      const reservationsCollection = db.collection(reservationsCollectionName);
+
+      // Konwersja id na ObjectId
+      const objectId = new ObjectId(reservationId);
+
+      // Sprawdź, czy rezerwacja istnieje
+      const reservation = await reservationsCollection.findOne({
+        _id: objectId,
+      });
+      if (!reservation) {
+        return res.status(404).json({ error: "Rezerwacja nie znaleziona" });
+      }
+
+      // Sprawdzenie, czy rezerwacja nie została już zaakceptowana
+      if (reservation.accepted) {
+        return res.status(200).json({
+          message: "Rezerwacja została już zaakceptowana.",
+          reservation,
+        });
+      }
+
+      // Zaktualizuj rezerwacje w bazie danych
+      const result = await reservationsCollection.updateOne(
+        { _id: objectId },
+        { $set: { accepted: true } }
+      );
+
+      if (result.matchedCount === 0) {
+        return res
+          .status(500)
+          .json({ error: "Nie udało się zaktualizować rezerwacji." });
+      }
+
+      // Sprawdzenie, czy aktualizacja się powiodła
+      if (result.matchedCount === 0) {
+        return res
+          .status(500)
+          .json({ error: "Nie udało się zaktualizować rezerwacji." });
+      }
+
+      // Pobranie zaktualizowanej rezerwacji
+      const updatedReservation = await reservationsCollection.findOne({
+        _id: objectId,
+      });
+
+      const userEmail = reservation.email;
+      const data = { updatedReservation, userEmail };
+
+      res.status(200).json({
+        message: "Rezerwacja została zaakceptowana.",
+        userEmail,
+        updatedReservation,
+      });
+    } catch (err) {
+      console.error("Błąd podczas pobierania rezerwacji:", err);
+      res.status(500).json({ error: "Wewnętrzny błąd serwera" });
+    }
+  }
+);
+
+// Endpoint do odrzucania rezerwacji
+app.delete(
+  "/reservation/decline/:reservationId",
+  cors(corsOptions),
+  async (req, res) => {
+    const { reservationId } = req.params;
+
+    // Sprawdzenie, czy ID zostało podane
+    if (!reservationId) {
+      return res.status(400).json({ error: "Brak id rezerwacji." });
+    }
+
+    try {
+      const db = await connectToDb();
+      const reservationsCollection = db.collection(reservationsCollectionName);
+      const announcementsCollection = db.collection(
+        announcementsCollectionName
+      );
+
+      // Walidacja ObjectId
+      let objectId;
+      try {
+        objectId = new ObjectId(reservationId);
+      } catch (error) {
+        return res.status(400).json({ error: "Nieprawidłowe ID rezerwacji." });
+      }
+
+      // Sprawdzenie, czy rezerwacja istnieje
+      const reservation = await reservationsCollection.findOne({
+        _id: objectId,
+      });
+      if (!reservation) {
+        return res.status(404).json({ error: "Rezerwacja nie znaleziona." });
+      }
+
+      // Usunięcie rezerwacji z bazy danych
+      const result = await reservationsCollection.deleteOne({ _id: objectId });
+
+      // Sprawdzenie, czy usunięcie się powiodło
+      if (result.deletedCount === 0) {
+        return res
+          .status(500)
+          .json({ error: "Nie udało się usunąć rezerwacji." });
+      }
+
+      // Ponowne dodawanie terminu do ogłoszenia
+      if (reservation.date) {
+        const objectIdAnnouncement = new ObjectId(reservation.announcementId);
+        const term = new Object(reservation.date);
+        const pushResult = await announcementsCollection.updateOne(
+          { _id: objectIdAnnouncement }, // Zakładając, że ogłoszenie ma ID rezerwacji
+          { $push: { terms: term } } // Dodanie daty rezerwacji do tablicy terms
+        );
+        console.log("push result", pushResult);
+      }
+
+      const userEmail = reservation.email;
+
+      res.status(200).json({
+        message: "Rezerwacja została odrzucona i usunięta z bazy danych.",
+        userEmail,
+        reservation,
+      });
+    } catch (err) {
+      console.error("Błąd podczas odrzucania rezerwacji:", err);
+      res.status(500).json({ error: "Wewnętrzny błąd serwera." });
+    }
+  }
+);
+
+app.get("/chat/teacher", async (req, res) => {
+  const { email } = req.query;
+  if (!email) {
+    console.log("Brakuje email w zapytaniu.");
+    return res.status(400).json({ error: "Email użytkownika jest wymagany." });
+  }
+
+  try {
+    const db = await connectToDb();
+    const reservationsCollection = db.collection(reservationsCollectionName);
+
+    const reservations = await reservationsCollection
+      .find({ email: email.trim(), accepted: true })
+      .toArray();
+
+    console.log("Znalezione rezerwacje:", reservations);
+
+    if (!reservations || reservations.length === 0) {
+      return res
+        .status(404)
+        .json({ error: "Brak zaakceptowanych rezerwacji." });
+    }
+
+    const teachers = reservations.map((reservation) => ({
+      name: reservation.teacher_name,
+      email: reservation.teacher_email,
+      subject: reservation.subject,
+    }));
+
+    res.status(200).json({ teachers });
+  } catch (err) {
+    console.error("Błąd podczas pobierania nauczycieli:", err);
+    res.status(500).json({ error: "Wewnętrzny błąd serwera." });
+  }
+});
+
+app.get("/chat/students", async (req, res) => {
+  const { teacherEmail } = req.query;
+  if (!teacherEmail) {
+    console.log("Brakuje teacheEmail w zapytaniu");
+    return res.status(400).json({ error: "Email nauczyciela jest wymagany" });
+  }
+
+  try {
+    const db = await connectToDb();
+    const reservationsCollection = db.collection(reservationsCollectionName);
+
+    //szukamy zaakceptowanych rezerwacji
+    const reservations = await reservationsCollection
+      .find({ teacher_email: teacherEmail.trim(), accepted: true })
+      .toArray();
+
+    console.log("znalezione rezerwacje przez nauczycieli", reservations);
+
+    if (!reservations || reservations.length == 0) {
+      return res.status(404).json({
+        error: "Brak zaakceptowanych rezerwacji dla tego nauczyciela",
+      });
+    }
+
+    const students = reservations.map((reservation) => ({
+      email: reservation.email, // Email studenta
+      subject: reservation.subject, // Przedmiot zarezerwowany przez studenta
+    }));
+
+    res.status(200).json({ students });
+  } catch (err) {
+    console.error("błąd catch", err);
+  }
+});
+
+app.get("/chat/messages", async (req, res) => {
+  const { teacherEmail, userEmail } = req.query;
+
+  try {
+    const db = await connectToDb();
+    const messagesCollection = db.collection("messages");
+
+    const messages = await messagesCollection
+      .find({
+        $or: [
+          { senderEmail: userEmail, receiverEmail: teacherEmail },
+          { senderEmail: teacherEmail, receiverEmail: userEmail },
+        ],
+      })
+      .sort({ timestamp: 1 })
+      .toArray();
+
+    res.status(200).json({ messages });
+  } catch (err) {
+    console.error("Błąd pobierania wiadomości:", err);
+    res.status(500).json({ error: "Nie udało się pobrać wiadomości." });
+  }
+});
+
+app.post("/chat/send", async (req, res) => {
+  const { senderEmail, receiverEmail, content } = req.body;
+
+  try {
+    const db = await connectToDb();
+    const messagesCollection = db.collection("messages");
+
+    const newMessage = {
+      senderEmail,
+      receiverEmail,
+      content,
+      timestamp: new Date(),
+    };
+
+    await messagesCollection.insertOne(newMessage);
+
+    res.status(201).json({ message: newMessage });
+  } catch (err) {
+    console.error("Błąd wysyłania wiadomości:", err);
+    res.status(500).json({ error: "Nie udało się wysłać wiadomości." });
+  }
+});
+
+// Funkcja do dodawania powiadomień o nadchodzących spotkaniach
+const addUpcomingMeetingNotifications = async () => {
+  try {
+    const db = await connectToDb();
+    const reservationsCollection = db.collection(reservationsCollectionName); // Kolekcja ze spotkaniami
+    const notificationsCollection = db.collection(notificationsCollectionName);
+    const usersCollection = db.collection(collectionName);
+
+    // Pobierz datę na jutro
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowString = tomorrow.toISOString().split("T")[0];
+
+    console.log("Sprawdzanie spotkań na jutro:", tomorrowString);
+
+    // Pobierz rezerwacje na jutro
+    const reservations = await reservationsCollection
+      .find({ "date.date": tomorrowString, accepted: true })
+      .toArray();
+
+    console.log("Rezerwacje na jutro:", reservations);
+
+    // Dodaj powiadomienia dla każdej rezerwacji
+    for (const reservation of reservations) {
+      if (reservation.accepted) {
+        const hour = reservation.date.hour ? String(reservation.date.hour).padStart(2, "0") : "00";
+        const minutes = reservation.date.minutes ? String(reservation.date.minutes).padStart(2, "0") : "00";
+        const meetingTime = `${hour}:${minutes}`;
+        
+        // Powiadomienie dla ucznia
+        const studentNotification = {
+          title: "Przypomnienie o spotkaniu",
+          message: `Masz zaplanowane spotkanie z nauczycielem ${reservation.teacher_name} jutro o ${meetingTime}.`,
+          date: new Date().toISOString(),
+          userEmail: reservation.email,
+        };
+
+        const user = await usersCollection.findOne({ email: reservation.email });
+        const userName = `${user.firstName} ${user.lastName}`;
+
+        // Powiadomienie dla nauczyciela
+        const teacherNotification = {
+          title: "Przypomnienie o spotkaniu",
+          message: `Masz zaplanowane spotkanie z uczniem (${userName}) jutro o ${meetingTime}.`,
+          date: new Date().toISOString(),
+          userEmail: reservation.teacher_email,
+        };
+
+        // Zapisz powiadomienia do bazy danych
+        await notificationsCollection.insertMany([
+          studentNotification,
+          teacherNotification,
+        ]);
+
+        console.log("Dodano powiadomienia dla rezerwacji:", reservation._id);
+      }
+    }
+
+    console.log("Powiadomienia o nadchodzących spotkaniach zostały dodane.");
+  } catch (err) {
+    console.error("Błąd podczas dodawania powiadomień o spotkaniach:", err);
+  }
+};
+// Endpoint do pobierania rezerwacji użytkownika
+app.get("/reservations/user/:email", cors(corsOptions), async (req, res) => {
+  const { email } = req.params;
+
+  try {
+    const db = await connectToDb();
+    const reservationsCollection = db.collection(reservationsCollectionName);
+
+    // Pobieranie rezerwacji dla danego użytkownika
+    const reservations = await reservationsCollection
+      .find({ userEmail: email })
       .toArray();
 
     res.status(200).json({ reservations });
   } catch (err) {
     console.error("Błąd podczas pobierania rezerwacji:", err);
     res.status(500).json({ error: "Wewnętrzny błąd serwera." });
+  }
+});
+
+
+// Harmonogram - codziennie o 12:00
+cron.schedule("10 12 * * *", addUpcomingMeetingNotifications);
+// Endpoint do pobierania opinii
+app.get("/reviews/:teacherId", async (req, res) => {
+  const { teacherId } = req.params;
+
+  try {
+    const db = await connectToDb();
+    const reviewsCollection = db.collection(reviewsCollectionName);
+    const reviews = await reviewsCollection.find({ teacherId }).toArray();
+
+    res.status(200).json(reviews);
+  } catch (err) {
+    console.error("Błąd podczas pobierania opinii:", err);
+    res.status(500).json({ error: "Nie udało się pobrać opinii." });
+  }
+});
+
+// Endpoint do dodawania opinii
+app.post("/reviews/:teacherId", async (req, res) => {
+  const { teacherId } = req.params;
+  const { review, studentEmail, rating } = req.body;
+  console.log("Otrzymane dane:", { review, studentEmail, rating });
+
+  try {
+    const db = await connectToDb();
+    const reviewsCollection = db.collection(reviewsCollectionName);
+
+    const newReview = {
+      teacherId,
+      review,
+      studentEmail,
+      timestamp: new Date(),
+      rating,
+    };
+
+    await reviewsCollection.insertOne(newReview);
+
+    res.status(201).json(newReview);
+  } catch (err) {
+    console.error("Błąd podczas dodawania opinii:", err);
+    res.status(500).json({ error: "Nie udało się dodać opinii." });
   }
 });
 
