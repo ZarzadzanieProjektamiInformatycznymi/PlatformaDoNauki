@@ -26,6 +26,7 @@ const collectionName = "users";
 const announcementsCollectionName = "announcements";
 const notificationsCollectionName = "notifications";
 const reservationsCollectionName = "reservations";
+const reviewsCollectionName = "reviews";
 const port = 4000;
 
 // Funkcja do połączenia z bazą danych
@@ -885,9 +886,71 @@ const addUpcomingMeetingNotifications = async () => {
     console.error("Błąd podczas dodawania powiadomień o spotkaniach:", err);
   }
 };
+// Endpoint do pobierania rezerwacji użytkownika
+app.get("/reservations/user/:email", cors(corsOptions), async (req, res) => {
+  const { email } = req.params;
+
+  try {
+    const db = await connectToDb();
+    const reservationsCollection = db.collection(reservationsCollectionName);
+
+    // Pobieranie rezerwacji dla danego użytkownika
+    const reservations = await reservationsCollection
+      .find({ userEmail: email })
+      .toArray();
+
+    res.status(200).json({ reservations });
+  } catch (err) {
+    console.error("Błąd podczas pobierania rezerwacji:", err);
+    res.status(500).json({ error: "Wewnętrzny błąd serwera." });
+  }
+});
+
 
 // Harmonogram - codziennie o 12:00
 cron.schedule("10 12 * * *", addUpcomingMeetingNotifications);
+// Endpoint do pobierania opinii
+app.get("/reviews/:teacherId", async (req, res) => {
+  const { teacherId } = req.params;
+
+  try {
+    const db = await connectToDb();
+    const reviewsCollection = db.collection(reviewsCollectionName);
+    const reviews = await reviewsCollection.find({ teacherId }).toArray();
+
+    res.status(200).json(reviews);
+  } catch (err) {
+    console.error("Błąd podczas pobierania opinii:", err);
+    res.status(500).json({ error: "Nie udało się pobrać opinii." });
+  }
+});
+
+// Endpoint do dodawania opinii
+app.post("/reviews/:teacherId", async (req, res) => {
+  const { teacherId } = req.params;
+  const { review, studentEmail, rating } = req.body;
+  console.log("Otrzymane dane:", { review, studentEmail, rating });
+
+  try {
+    const db = await connectToDb();
+    const reviewsCollection = db.collection(reviewsCollectionName);
+
+    const newReview = {
+      teacherId,
+      review,
+      studentEmail,
+      timestamp: new Date(),
+      rating,
+    };
+
+    await reviewsCollection.insertOne(newReview);
+
+    res.status(201).json(newReview);
+  } catch (err) {
+    console.error("Błąd podczas dodawania opinii:", err);
+    res.status(500).json({ error: "Nie udało się dodać opinii." });
+  }
+});
 
 // Uruchomienie serwera
 app.listen(port, () => {

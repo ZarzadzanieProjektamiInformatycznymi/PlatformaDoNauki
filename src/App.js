@@ -11,6 +11,8 @@ import Home from "./Home";
 import Zarzadzaj from "./zarzadzaj"; // Importuj nowy komponent
 import Reservations from "./reservations";
 import Chat from "./Chat";
+import Kalendarz from "./Kalendarz";
+import Reviews from "./Reviews";
 
 function App() {
   const [user, setUser] = useState(() => {
@@ -46,6 +48,10 @@ function App() {
           } // Przekazujemy setUser do Home
         />
         <Route
+          path="/kalendarz"
+          element={user ? <Kalendarz user={user} /> : <Navigate to="/" />}
+        />
+        <Route
           path="/zarzadzaj"
           element={
             user ? (
@@ -55,6 +61,7 @@ function App() {
             )
           } // Nowa trasa do zarządzania kontem z przekazanym user
         />
+        
         <Route
           path="/reservations"
           element={
@@ -66,6 +73,7 @@ function App() {
           } // Trasa do zarządzania rezerwacjami z przekazanym user
         />
         <Route path="/chat" element={<Chat user={user} />} />
+        <Route path="/reviews/:teacherId" element={<Reviews />} />
       </Routes>
     </Router>
   );
